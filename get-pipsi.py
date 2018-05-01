@@ -3,7 +3,7 @@ import argparse
 import os
 import shutil
 import sys
-from subprocess import call
+from subprocess import Popen
 import textwrap
 
 
@@ -32,6 +32,7 @@ except ImportError:
 
 DEFAULT_PIPSI_HOME = os.path.expanduser('~/.local/venvs')
 DEFAULT_PIPSI_BIN_DIR = os.path.expanduser('~/.local/bin')
+DEFAULT_PIPSI_SUFFIX_VERSION = '0'
 
 
 def echo(msg=''):
@@ -53,24 +54,27 @@ def succeed(msg):
 def command_exists(cmd):
     with open(os.devnull, 'w') as null:
         try:
-            return call(
+            return Popen(
                 [cmd, '--version'],
-                stdout=null, stderr=null) == 0
+                stdout=null, stderr=null).wait() == 0
         except OSError:
             return False
 
 
-def publish_script(venv, bin_dir):
+def publish_script(venv, bin_dir, suffix):
     if IS_WIN:
         for name in os.listdir(venv + '/Scripts'):
             if 'pipsi' in name.lower():
-                shutil.copy(venv + '/Scripts/' + name, bin_dir)
+                shutil.copy(venv + '/Scripts/' + name,
+                            os.path.join(bin_dir, append_suffix(name, suffix)))
     else:
-        os.symlink(venv + '/bin/pipsi', bin_dir + '/pipsi')
-    echo('Installed pipsi binary in ' + bin_dir)
+        os.symlink(venv + '/bin/pipsi',
+                   os.path.join(bin_dir, append_suffix('pipsi', suffix)))
+    echo('Installed {} binary in {}'.format(append_suffix('pipsi', suffix),
+                                            bin_dir))
 
 
-def install_files(venv, bin_dir, install):
+def install_files(venv, bin_dir, install, suffix):
     try:
         os.makedirs(bin_dir)
     except OSError:
@@ -82,20 +86,26 @@ def install_files(venv, bin_dir, install):
         except (OSError, IOError):
             pass
 
-    if call([sys.executable, '-m', venv_pkg, venv]) != 0:
+    if Popen([sys.executable, '-m', venv_pkg, venv]).wait() != 0:
         _cleanup()
         fail('Could not create virtualenv for pipsi :(')
 
-    if call([venv + PIP, 'install', install]) != 0:
+    # pass env to overcome issue described here:
+    # https://github.com/pypa/virtualenv/issues/845
+    env = dict(os.environ)
+    env.pop('__PYVENV_LAUNCHER__', None)
+    if Popen([venv + PIP, 'install', install], env=env).wait() != 0:
         _cleanup()
         fail('Could not install pipsi :(')
 
-    publish_script(venv, bin_dir)
+    publish_script(venv, bin_dir, suffix)
 
 
 def parse_options(argv):
     bin_dir = os.environ.get('PIPSI_BIN_DIR', DEFAULT_PIPSI_BIN_DIR)
     home_dir = os.environ.get('PIPSI_HOME', DEFAULT_PIPSI_HOME)
+    suffix_version = os.environ.get('PIPSI_SUFFIX_VERSION',
+                                    DEFAULT_PIPSI_SUFFIX_VERSION) == '1'
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -130,24 +140,44 @@ def parse_options(argv):
             "Use this to ignore a package manager based install or for testing"
         ),
     )
+    parser.add_argument(
+        '--suffix-version',
+        action='store_true',
+        default=suffix_version,
+        help='Suffix executables with Python version (including pipsi)',
+    )
     return parser.parse_args(argv)
+
+
+def append_suffix(name, suffix):
+    if suffix:
+        if '.' in name:
+            ext = name[name.rindex('.'):]
+            return name[:name.rindex('.')] + '-' + suffix + ext
+        return name + '-' + suffix
+    return name
 
 
 def main(argv=sys.argv[1:]):
     args = parse_options(argv)
-
-    if command_exists('pipsi') and not args.ignore_existing:
-        succeed('You already have pipsi installed')
+    if args.suffix_version:
+        suffix = '.'.join(map(str, sys.version_info[:3]))
     else:
-        echo('Installing pipsi')
+        suffix = ''
+
+    cmd = append_suffix('pipsi', suffix)
+    if command_exists(cmd) and not args.ignore_existing:
+        succeed('You already have {} installed'.format(cmd))
+    else:
+        echo('Installing ' + cmd)
 
     if venv_pkg is None:
         fail('You need to have virtualenv installed to bootstrap pipsi.')
 
-    venv = os.path.join(args.home_dir, 'pipsi')
-    install_files(venv, args.bin_dir, args.src)
+    venv = os.path.join(args.home_dir, append_suffix('pipsi', suffix))
+    install_files(venv, args.bin_dir, args.src, suffix)
 
-    if not command_exists('pipsi'):
+    if not command_exists(cmd):
         echo(textwrap.dedent(
             '''
             %(sep)s
@@ -163,7 +193,7 @@ def main(argv=sys.argv[1:]):
             ''' % dict(sep='=' * 60, bin_dir=args.bin_dir)
         ))
 
-    succeed('pipsi is now installed.')
+    succeed(cmd + ' is now installed.')
 
 
 if __name__ == '__main__':

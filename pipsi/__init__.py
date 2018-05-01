@@ -50,6 +50,20 @@ CONTEXT_SETTINGS = dict(
     help_option_names=['-h', '--help'],
 )
 
+if os.path.basename(sys.argv[0]).startswith('pipsi-'):
+    SUFFIX = os.path.basename(sys.argv[0])[len('pipsi-'):]
+else:
+    SUFFIX = ''
+
+
+def append_suffix(name):
+    if SUFFIX:
+        if '.' in name:
+            ext = name[name.rindex('.'):]
+            return name[:name.rindex('.')] + '-' + SUFFIX + ext
+        return name + '-' + SUFFIX
+    return name
+
 
 def proc_output(s):
     s = s.strip()
@@ -192,7 +206,7 @@ class Repo(object):
         return name, [location]
 
     def get_package_path(self, package):
-        return join(self.home, normalize_package(package))
+        return join(self.home, append_suffix(normalize_package(package)))
 
     def find_installed_executables(self, path):
         prefix = join(realpath(normpath(path)), '')
@@ -225,7 +239,7 @@ class Repo(object):
         rv = []
         for script in scripts:
             script_dst = os.path.join(
-                self.bin_dir, os.path.basename(script))
+                self.bin_dir, append_suffix(os.path.basename(script)))
             if publish_script(script, script_dst):
                 rv.append((script, script_dst))
 
@@ -284,7 +298,11 @@ class Repo(object):
             if editable:
                 args.append('--editable')
 
-            if Popen(args + install_args).wait() != 0:
+            # pass env to overcome issue described here:
+            # https://github.com/pypa/virtualenv/issues/845
+            env = dict(os.environ)
+            env.pop('__PYVENV_LAUNCHER__', None)
+            if Popen(args + install_args, env=env).wait() != 0:
                 click.echo('Failed to pip install.  Aborting.')
                 return _cleanup()
         except Exception:
